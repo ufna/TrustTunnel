@@ -497,6 +497,7 @@ fn main() {
     };
 
     let reload_tls_hosts_task = {
+        let core = core.clone();
         let tls_hosts_settings_path = tls_hosts_settings_path.clone();
         async move {
             let mut sighup_listener = signal::unix::signal(signal::unix::SignalKind::hangup())
@@ -519,6 +520,47 @@ fn main() {
         }
     };
 
+    let reload_credentials_task = {
+        let core = core.clone();
+        let settings_path = settings_path.clone();
+        async move {
+            let mut sigusr1_listener =
+                signal::unix::signal(signal::unix::SignalKind::user_defined1())
+                    .expect("Couldn't start SIGUSR1 listener");
+
+            loop {
+                sigusr1_listener.recv().await;
+                info!("Reloading credentials");
+
+                let new_settings: Settings = match toml::from_str(
+                    &std::fs::read_to_string(&settings_path)
+                        .expect("Couldn't read the settings file"),
+                ) {
+                    Ok(s) => s,
+                    Err(e) => {
+                        error!("Couldn't parse the settings file during credentials reload: {}", e);
+                        continue;
+                    }
+                };
+
+                let new_authenticator: Option<Arc<dyn Authenticator>> =
+                    if !new_settings.get_clients().is_empty() {
+                        Some(Arc::new(RegistryBasedAuthenticator::new(
+                            new_settings.get_clients(),
+                        )))
+                    } else {
+                        None
+                    };
+
+                core.reload_credentials(new_authenticator);
+                info!(
+                    "Credentials successfully reloaded ({} clients)",
+                    new_settings.get_clients().len()
+                );
+            }
+        }
+    };
+
     #[allow(clippy::await_holding_lock)]
     let interrupt_task = async move {
         tokio::signal::ctrl_c().await.unwrap();
@@ -537,6 +579,10 @@ fn main() {
             },
             _ = reload_tls_hosts_task => {
                 error!("Error while reloading TLS hosts");
+                1
+            },
+            _ = reload_credentials_task => {
+                error!("Error while reloading credentials");
                 1
             },
             _ = interrupt_task => {

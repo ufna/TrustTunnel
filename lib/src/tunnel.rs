@@ -151,12 +151,13 @@ impl Tunnel {
                         .map(|x| x.map(authentication::Source::into_owned));
                     let protocol = self.downstream.protocol();
                     if let Ok(Some(source)) = auth_info {
-                        let authenticated = self
-                            .context
-                            .authenticator
-                            .as_ref()
-                            .map(|a| a.authenticate(&source, &self.id) == Status::Pass)
-                            .unwrap_or(false);
+                        let authenticated = {
+                            let auth_guard = self.context.authenticator.read().unwrap();
+                            auth_guard
+                                .as_ref()
+                                .map(|a| a.authenticate(&source, &self.id) == Status::Pass)
+                                .unwrap_or(false)
+                        };
                         if authenticated {
                             let creds = match &source {
                                 authentication::Source::ProxyBasic(s) => s.as_ref(),
@@ -203,10 +204,11 @@ impl Tunnel {
                 let auth_info = request
                     .auth_info()
                     .map(|x| x.map(authentication::Source::into_owned));
+                let current_auth = context.authenticator.read().unwrap().clone();
                 let forwarder_auth = match (
                     auth_info,
                     authentication_policy,
-                    context.authenticator.clone(),
+                    current_auth,
                 ) {
                     (Ok(Some(source)), _, Some(authenticator)) => {
                         match authenticator.authenticate(&source, &log_id) {
