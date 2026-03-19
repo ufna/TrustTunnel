@@ -552,9 +552,9 @@ fn main() {
                         None
                     };
 
-                core.reload_credentials(new_authenticator);
+                core.reload_credentials(&new_settings, new_authenticator);
                 info!(
-                    "Credentials successfully reloaded ({} clients)",
+                    "Credentials and connection limits reloaded ({} clients)",
                     new_settings.get_clients().len()
                 );
             }
