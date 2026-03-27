@@ -83,6 +83,7 @@ pub(crate) struct Context {
     next_client_id: Arc<AtomicU64>,
     next_tunnel_id: Arc<AtomicU64>,
     pub connection_limiter: Arc<RwLock<Option<Arc<ConnectionLimiter>>>>,
+    pub rules_engine: Arc<RwLock<Option<Arc<rules::RulesEngine>>>>,
 }
 
 impl Context {
@@ -134,6 +135,11 @@ impl Core {
             None
         };
 
+        let rules_engine = settings
+            .rules_engine
+            .as_ref()
+            .map(|e| Arc::new(rules::RulesEngine::from_config(e.config().clone())));
+
         Ok(Self {
             context: Arc::new(Context {
                 settings: settings.clone(),
@@ -153,6 +159,7 @@ impl Core {
                 next_client_id: Default::default(),
                 next_tunnel_id: Default::default(),
                 connection_limiter: Arc::new(RwLock::new(connection_limiter)),
+                rules_engine: Arc::new(RwLock::new(rules_engine)),
             }),
         })
     }
@@ -247,6 +254,14 @@ impl Core {
 
         let mut limiter = self.context.connection_limiter.write().unwrap();
         *limiter = new_limiter;
+    }
+
+    /// Reload connection filtering rules at runtime without restarting.
+    /// Atomically replaces the rules engine so existing connections are not affected.
+    pub fn reload_rules(&self, new_engine: Option<rules::RulesEngine>) {
+        let arc_engine = new_engine.map(Arc::new);
+        let mut engine = self.context.rules_engine.write().unwrap();
+        *engine = arc_engine;
     }
 
     pub fn reload_tls_hosts_settings(
@@ -691,7 +706,8 @@ impl Core {
         client_random: Option<&[u8]>,
         log_id: &log_utils::IdChain<u64>,
     ) -> Result<(), String> {
-        if let Some(rules_engine) = &context.settings.rules_engine {
+        let engine_guard = context.rules_engine.read().unwrap();
+        if let Some(rules_engine) = &*engine_guard {
             if let Some(ip) = client_ip {
                 let rule_result = rules_engine.evaluate(&ip, client_random);
                 match rule_result {
@@ -829,6 +845,7 @@ impl Default for Context {
             next_client_id: Default::default(),
             next_tunnel_id: Default::default(),
             connection_limiter: Arc::new(RwLock::new(None)),
+            rules_engine: Arc::new(RwLock::new(None)),
         }
     }
 }

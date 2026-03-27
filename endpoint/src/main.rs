@@ -520,6 +520,43 @@ fn main() {
         }
     };
 
+    let reload_rules_task = {
+        let core = core.clone();
+        let settings_path = settings_path.clone();
+        async move {
+            let mut sigusr2_listener =
+                signal::unix::signal(signal::unix::SignalKind::user_defined2())
+                    .expect("Couldn't start SIGUSR2 listener");
+
+            loop {
+                sigusr2_listener.recv().await;
+                info!("Reloading connection filtering rules");
+
+                let new_settings: Settings = match toml::from_str(
+                    &std::fs::read_to_string(&settings_path)
+                        .expect("Couldn't read the settings file"),
+                ) {
+                    Ok(s) => s,
+                    Err(e) => {
+                        error!("Couldn't parse the settings file during rules reload: {}", e);
+                        continue;
+                    }
+                };
+
+                let new_engine = new_settings
+                    .get_rules_engine()
+                    .as_ref()
+                    .map(|e| trusttunnel::rules::RulesEngine::from_config(e.config().clone()));
+                let rule_count = new_engine
+                    .as_ref()
+                    .map(|e| e.config().rule.len())
+                    .unwrap_or(0);
+                core.reload_rules(new_engine);
+                info!("Connection filtering rules reloaded ({} rules)", rule_count);
+            }
+        }
+    };
+
     let reload_credentials_task = {
         let core = core.clone();
         let settings_path = settings_path.clone();
@@ -583,6 +620,10 @@ fn main() {
             },
             _ = reload_credentials_task => {
                 error!("Error while reloading credentials");
+                1
+            },
+            _ = reload_rules_task => {
+                error!("Error while reloading rules");
                 1
             },
             _ = interrupt_task => {
